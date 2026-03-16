@@ -2,22 +2,49 @@ export async function onRequest(context) {
   const { request, env, params } = context;
   const action = params.action[0];
   const url = new URL(request.url);
-
-  // 防呆機制：取得 KV (如果沒綁定也不會整個系統崩潰)
   const kv = env.NOTICE_BOARD_KV;
 
   // ==========================================
-  // 1. 讀取公告列表 (支援條件過濾)
+  // 0. 處理 Sync Webhook (接收 GAS 更新通知並寫入 KV)
+  // ==========================================
+  if (action === 'sync') {
+    if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
+
+    // 驗證是否真的是從 GAS 傳來的
+    const authHeader = request.headers.get('Authorization');
+    if (authHeader !== `Bearer ${env.API_SECRET}`) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+
+    try {
+      // 向 GAS 索取最新的公告列表
+      const gasUrl = `${env.GAS_URL}?action=getPosts&api_secret=${env.API_SECRET}`;
+      const res = await fetch(gasUrl);
+      const json = await res.json();
+
+      if (json.success && kv) {
+        // 成功！寫入 CF KV 資料庫
+        await kv.put('ALL_POSTS', JSON.stringify(json.data));
+        return new Response(JSON.stringify({ success: true, message: 'KV Database Synced' }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      throw new Error('Failed to fetch data from GAS or KV not bound');
+    } catch (err) {
+      return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+    }
+  }
+
+  // ==========================================
+  // 1. 讀取公告列表 (前端畫面呼叫)
   // ==========================================
   if (action === 'getPosts') {
     let posts = null;
 
-    // 嘗試從 KV 拿資料
     if (kv) {
-       try { posts = await kv.get('ALL_POSTS', { type: 'json' }); } catch(e) { console.log("KV 讀取失敗"); }
+       try { posts = await kv.get('ALL_POSTS', { type: 'json' }); } catch(e) { /* 忽略 */ }
     }
 
-    // 如果 KV 沒資料 (或沒綁定)，退回向 GAS 索取
     if (!posts) {
       const gasUrl = new URL(env.GAS_URL);
       gasUrl.searchParams.set('action', 'getPosts');
@@ -31,22 +58,15 @@ export async function onRequest(context) {
       });
       const json = await res.json();
       posts = json.data;
-
-      // 順手存回 KV
-      if (kv && posts) {
-         await kv.put('ALL_POSTS', JSON.stringify(posts));
-      }
+      if (kv && posts) await kv.put('ALL_POSTS', JSON.stringify(posts));
     } else {
-      // 如果資料是從 KV 來的，我們要在 Cloudflare 端執行「日期與關鍵字」過濾
       try {
         const reqClone = request.clone();
         const body = await reqClone.json();
-        
         if (body && body.filters && Array.isArray(posts)) {
           const q = (body.filters.search || "").toLowerCase();
           const dStart = body.filters.dateStart || "";
           const dEnd = body.filters.dateEnd || "";
-
           posts = posts.filter(p => {
             if (q && !p.title.toLowerCase().includes(q)) return false;
             const pDate = p.date.split(' ')[0];
@@ -55,10 +75,9 @@ export async function onRequest(context) {
             return true;
           });
         }
-      } catch(e) { /* 忽略解析錯誤，回傳全部 */ }
+      } catch(e) {}
     }
 
-    // 確保永遠回傳陣列，避免前端 map() 報錯
     return new Response(JSON.stringify({ success: true, data: posts || [] }), {
       headers: { 'Content-Type': 'application/json' }
     });
