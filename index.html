@@ -1,1 +1,552 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>企業內部公告系統</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+  <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';</script>
 
+  <style>
+    .loading-mask { position: fixed; inset: 0; background: rgba(255,255,255,0.95); z-index: 60; display: flex; justify-content: center; align-items: center; backdrop-filter: blur(2px); }
+    .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #2563eb; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    @keyframes fadeInDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in { animation: fadeInDown 0.4s ease-out forwards; }
+    
+    .pdf-page-canvas { width: 100%; border: 1px solid #ddd; margin-bottom: 1rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); display: block; }
+    .btn-action { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 4px; transition: all 0.2s; font-size: 0.75rem; font-weight: 500; cursor: pointer; }
+    .btn-action:hover { opacity: 0.9; transform: translateY(-1px); }
+    
+    #editor-container { position: relative; height: 400px; }
+    #source-textarea { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 600px; display: none; padding: 12px; font-family: monospace; z-index: 10; resize: vertical; border: 1px solid #ccc; background: #fafafa; font-size: 13px; line-height: 1.4; color: #333; outline: none; }
+  </style>
+</head>
+<body class="bg-slate-50 text-gray-800 font-sans h-screen flex flex-col">
+
+  <div id="loadingMask" class="loading-mask hidden"><div class="spinner"></div></div>
+
+  <div id="bannerContainer" class="hidden w-full bg-gray-200 border-b border-gray-300">
+    <img id="bannerImg" class="w-full h-auto object-cover max-h-48 mx-auto" src="" alt="Banner">
+  </div>
+
+  <header class="bg-gradient-to-r from-blue-800 to-blue-600 text-white shadow-lg z-40 sticky top-0">
+    <div class="max-w-6xl mx-auto px-4 py-2 flex justify-between items-center h-14">
+      <div class="flex items-center gap-2 cursor-pointer group" onclick="handleTitleClick()" title="回首頁">
+        <h1 id="siteTitle" class="font-bold text-lg tracking-wide group-hover:opacity-90 transition shadow-sm">系統載入中...</h1>
+      </div>
+
+      <div id="navActions" class="flex items-center gap-3 hidden">
+        <div class="bg-blue-900/40 px-3 py-1 rounded-lg text-xs flex flex-col items-end border border-blue-500/30">
+          <span id="userName" class="font-bold text-blue-50"></span>
+          <span id="userRole" class="text-blue-200 scale-90 origin-right"></span>
+        </div>
+        <div class="flex gap-2 items-center">
+          <button id="btnNewPost" onclick="openEditor()" class="hidden btn-action bg-green-500 hover:bg-green-600 text-white shadow">
+            <span class="text-lg leading-none pb-0.5">＋</span> 新增
+          </button>
+          <button onclick="handleLogout()" class="btn-action bg-red-500 hover:bg-red-600 text-white shadow ml-1" title="登出">
+            登出 ➔
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex-1 overflow-auto bg-slate-50 relative">
+    <main class="max-w-4xl mx-auto p-4 md:p-6 pb-12 min-h-full flex flex-col">
+      
+      <section id="view-login" class="flex-1 flex flex-col justify-center items-center py-8 hidden animate-fade-in">
+        <div class="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
+          <div class="bg-blue-600 p-6 text-center">
+            <h2 class="text-2xl font-bold text-white tracking-wide">員工登入</h2>
+          </div>
+          <div class="p-8">
+            <form onsubmit="handleLogin(event)" class="space-y-5">
+              <div>
+                <label class="block text-gray-700 text-sm font-bold mb-1.5 ml-1">帳號</label>
+                <input type="text" id="inpUser" class="w-full border p-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" required>
+              </div>
+              <div>
+                 <label class="block text-gray-700 text-sm font-bold mb-1.5 ml-1">密碼</label>
+                 <input type="password" id="inpPass" class="w-full border p-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" required>
+              </div>
+              <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-bold shadow-md transition">
+                登入系統
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-list" class="hidden">
+        <div class="bg-white p-4 rounded shadow mb-4 sticky top-0 z-30 border-b flex flex-wrap gap-3 justify-between">
+          <input type="text" id="searchFilter" onkeydown="if(event.key==='Enter') doSearch()" placeholder="標題搜尋..." class="border rounded p-2 text-sm outline-none flex-1 min-w-[200px]">
+          <div class="flex gap-2 items-center flex-wrap">
+             <select id="sortFilter" onchange="doSearch()" class="border rounded p-2 text-sm bg-white">
+                <option value="new">日期 (新 ➔ 舊)</option>
+                <option value="old">日期 (舊 ➔ 新)</option>
+             </select>
+             <input type="date" id="dateStart" class="border rounded p-2 text-sm">
+             <span class="text-gray-400">~</span>
+             <input type="date" id="dateEnd" class="border rounded p-2 text-sm">
+             <button onclick="doSearch()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 shadow-sm">查詢</button>
+             <button onclick="clearFilters()" class="text-blue-500 text-sm underline px-2">重置</button>
+          </div>
+        </div>
+        <div id="postListContainer" class="space-y-3"></div>
+        <div id="noDataMsg" class="hidden text-center mt-12 text-gray-500">沒有符合條件的公告</div>
+      </section>
+
+      <section id="view-editor" class="hidden animate-fade-in">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold border-l-4 border-blue-600 pl-3">編輯公告</h2>
+          <button onclick="showView('view-list')" class="text-gray-500 hover:text-red-600 text-sm flex items-center gap-1">✕ 取消</button>
+        </div>
+        <form id="postForm" class="bg-white p-6 rounded-lg shadow-md space-y-4">
+          <input type="hidden" id="editPostId">
+          <input type="text" id="editTitle" placeholder="在此輸入公告標題" class="w-full text-xl font-bold border-b-2 p-2 focus:border-blue-500 outline-none" required>
+          <div class="mt-2 relative">
+             <div id="editor-container" class="rounded-b border-t-0"></div>
+          </div>
+          <div class="border-2 border-dashed border-gray-300 p-6 rounded-lg bg-gray-50 text-center hover:bg-gray-100 transition relative">
+            <label class="cursor-pointer block">
+              <span class="text-4xl block mb-2">☁️</span>
+              <span class="text-blue-600 font-bold hover:underline">點擊上傳 PDF 或 圖片檔案</span>
+              <input type="file" class="hidden" onchange="handleFileUpload(this)">
+            </label>
+            <div id="attachmentList" class="mt-4 text-left space-y-2"></div>
+          </div>
+          <button type="button" onclick="openPreview()" class="w-full bg-blue-100 text-blue-800 py-3 rounded-lg font-bold hover:bg-blue-200">
+             👀 預覽與發布
+          </button>
+        </form>
+      </section>
+
+      <section id="view-viewer" class="hidden animate-fade-in">
+        <div id="previewControls" class="hidden mb-6 flex gap-4 bg-yellow-50 p-4 border border-yellow-200 rounded-lg">
+            <button onclick="showView('view-editor')" class="flex-1 bg-white border text-gray-700 py-2 rounded font-bold">⬅️ 返回修改</button>
+            <button onclick="executeSavePost()" class="flex-1 bg-green-600 text-white py-2 rounded font-bold">🚀 確認發布</button>
+        </div>
+        
+        <div id="readControls" class="mb-4 flex justify-between items-center">
+            <button onclick="showView('view-list')" class="text-blue-600 font-bold bg-white px-3 py-1.5 rounded shadow-sm border">⬅️ 返回列表</button>
+            <div id="viewerAdminBtns" class="flex gap-2 hidden"></div>
+        </div>
+
+        <article class="bg-white p-8 md:p-10 rounded-lg shadow-lg min-h-[60vh]">
+          <h1 id="viewTitle" class="text-2xl md:text-4xl font-extrabold mb-3 text-gray-800"></h1>
+          <div class="text-sm text-gray-500 mb-8 border-b pb-4">
+            📅 <span id="viewDate"></span> | 👤 <span id="viewAuthor"></span>
+          </div>
+          <div id="viewContent" class="prose max-w-none mb-12 ql-editor px-0"></div>
+          
+          <div id="viewAttachments" class="border-t pt-8">
+            <h3 class="font-bold text-gray-500 mb-4">📎 附件清單</h3>
+            <div id="attachmentContainer" class="flex flex-col gap-6"></div>
+          </div>
+          
+          <div id="magicLinkSection" class="mt-12 pt-6 border-t border-dashed hidden bg-purple-50 p-4 rounded-lg">
+             <button onclick="createMagicLink()" class="bg-white border text-purple-700 px-4 py-2 rounded text-sm font-bold shadow-sm">🔗 產生外部訪客連結</button>
+             <div id="magicLinkResult" class="mt-4 text-sm break-all font-mono bg-white p-3 border rounded hidden select-all"></div>
+          </div>
+        </article>
+      </section>
+      
+    </main>
+    <footer id="footerContent" class="text-center p-6 text-xs text-gray-400 mt-auto"></footer>
+  </div>
+
+  <script>
+    // --- 核心 API 通訊函式 (取代 google.script.run) ---
+    async function apiCall(action, payload = {}) {
+      try {
+        const res = await fetch(`/api/${action}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, ...payload })
+        });
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'API 錯誤');
+        return json.data;
+      } catch (err) {
+        console.error('API Error:', err);
+        throw err;
+      }
+    }
+
+    // --- Global Variables ---
+    let currentUser = null;
+    let currentAttachments = [];
+    let quill;
+    let allPostsData = [];
+    let currentPostIdInViewer = null;
+    let defaultStartDateSetting = '';
+
+    // --- 初始化 ---
+    window.onload = async function() {
+      quill = new Quill('#editor-container', {
+        theme: 'snow',
+        modules: { toolbar: [
+            [{'header': [1,2,false]}, 'bold', 'italic', 'underline', 'clean'],
+            [{'list': 'ordered'}, {'list': 'bullet'}],
+            [{'color': []}, {'background': []}], ['link']
+        ]}
+      });
+
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('token') && urlParams.get('post')) {
+        initMagicMode(urlParams.get('token'), urlParams.get('post'));
+      } else {
+        initAppMode();
+      }
+    };
+
+    function applySettings(settings) {
+      document.getElementById('siteTitle').innerText = settings.SiteTitle || '公告系統';
+      document.getElementById('footerContent').innerText = settings.FooterContent || '';
+      if (settings.BannerImage) {
+        document.getElementById('bannerImg').src = settings.BannerImage;
+        document.getElementById('bannerContainer').classList.remove('hidden');
+      }
+      if (settings.Default_Start_Date) {
+          defaultStartDateSetting = settings.Default_Start_Date;
+          if (!document.getElementById('dateStart').value) document.getElementById('dateStart').value = defaultStartDateSetting;
+      }
+    }
+
+    async function initAppMode() {
+      showLoading(true);
+      try {
+        const settings = await apiCall('initData');
+        applySettings(settings);
+        
+        const stored = localStorage.getItem('gas_user_v3');
+        if (stored) {
+          currentUser = JSON.parse(stored);
+          loginSuccessUI();
+        } else {
+          showView('view-login');
+        }
+      } catch (e) {
+        alert('初始化失敗：' + e.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    async function initMagicMode(token, postId) {
+      showLoading(true);
+      try {
+        const verify = await apiCall('decodeMagicToken', { token });
+        if (!verify.valid || verify.postId !== postId) throw new Error('連結已失效或過期');
+        
+        const post = await apiCall('getPost', { postId });
+        const settings = await apiCall('initData');
+        
+        applySettings(settings);
+        currentUser = { role: 'Guest' };
+        document.title = post.title;
+        renderPostDetail(post);
+        showView('view-viewer');
+        document.getElementById('readControls').classList.add('hidden');
+      } catch (e) {
+        document.body.innerHTML = `<div class="h-screen flex items-center justify-center text-red-500 font-bold text-xl">⚠️ ${e.message}</div>`;
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    // --- UI Helpers ---
+    function showLoading(show) { document.getElementById('loadingMask').className = show ? 'loading-mask' : 'loading-mask hidden'; }
+    function showView(id) {
+      ['view-login', 'view-list', 'view-editor', 'view-viewer'].forEach(v => document.getElementById(v).classList.add('hidden'));
+      document.getElementById(id).classList.remove('hidden');
+      window.scrollTo(0, 0);
+    }
+    function handleTitleClick() { currentUser && currentUser.role !== 'Guest' ? showView('view-list') : null; }
+
+    // --- 登入邏輯 ---
+    async function handleLogin(e) {
+      e.preventDefault();
+      showLoading(true);
+      try {
+        const u = document.getElementById('inpUser').value.trim();
+        const p = document.getElementById('inpPass').value.trim();
+        const user = await apiCall('login', { form: { username: u, password: p }});
+        currentUser = user;
+        localStorage.setItem('gas_user_v3', JSON.stringify(user));
+        loginSuccessUI();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    function loginSuccessUI() {
+      document.getElementById('navActions').classList.remove('hidden');
+      document.getElementById('userName').innerText = currentUser.name;
+      document.getElementById('userRole').innerText = currentUser.role;
+      if (['Admin', 'Editor'].includes(currentUser.role)) document.getElementById('btnNewPost').classList.remove('hidden');
+      showView('view-list');
+      doSearch();
+    }
+
+    function handleLogout() {
+      currentUser = null;
+      localStorage.removeItem('gas_user_v3');
+      document.getElementById('navActions').classList.add('hidden');
+      document.getElementById('postForm').reset();
+      showView('view-login');
+    }
+
+    // --- 列表與搜尋 ---
+    async function doSearch() {
+       showLoading(true);
+       try {
+         const filters = {
+            search: document.getElementById('searchFilter').value,
+            dateStart: document.getElementById('dateStart').value,
+            dateEnd: document.getElementById('dateEnd').value
+         };
+         const posts = await apiCall('getPosts', { filters });
+         allPostsData = posts;
+         renderPostList(posts);
+       } catch (e) {
+         console.error(e);
+       } finally {
+         showLoading(false);
+       }
+    }
+
+    function clearFilters() {
+      document.getElementById('searchFilter').value = '';
+      document.getElementById('dateStart').value = defaultStartDateSetting;
+      document.getElementById('dateEnd').value = '';
+      doSearch();
+    }
+
+    function renderPostList(posts) {
+       const sortType = document.getElementById('sortFilter').value;
+       posts.sort((a,b) => sortType === 'old' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
+       
+       const con = document.getElementById('postListContainer');
+       con.innerHTML = '';
+       document.getElementById('noDataMsg').classList.toggle('hidden', posts.length === 0);
+       
+       posts.forEach(p => {
+          const card = document.createElement('div');
+          card.className = "bg-white p-5 rounded-lg shadow-sm border border-l-4 border-l-blue-500 hover:shadow-md cursor-pointer transition";
+          card.innerHTML = `<h3 class="font-bold text-lg text-gray-800">${p.title}</h3><div class="text-xs text-gray-400 mt-2">📅 ${p.date.split(' ')[0]} | 👤 ${p.author}</div>`;
+          card.onclick = () => viewPost(p.id);
+          con.appendChild(card);
+       });
+    }
+
+    // --- 編輯與上傳 ---
+    function openEditor(post = null) {
+      document.getElementById('postForm').reset();
+      document.getElementById('editPostId').value = post ? post.id : '';
+      document.getElementById('editTitle').value = post ? post.title : '';
+      quill.root.innerHTML = post ? post.content : '';
+      currentAttachments = post ? (post.attachments || []) : [];
+      renderAttachmentsInEditor();
+      showView('view-editor');
+    }
+
+    async function handleFileUpload(input) {
+      const file = input.files[0]; 
+      if (!file) return;
+      
+      if (file.size > 10 * 1024 * 1024) return alert(`檔案過大！單檔限制 10 MB`);
+      
+      showLoading(true);
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          // 直接傳遞原始 MIME，後端不強制轉 PDF
+          const res = await apiCall('uploadFile', { payload: { name: file.name, mime: file.type, data: e.target.result }});
+          currentAttachments.push(res); 
+          renderAttachmentsInEditor();
+        } catch(err) {
+          alert("上傳失敗: " + err.message);
+        } finally {
+          input.value = '';
+          showLoading(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    
+    function renderAttachmentsInEditor() {
+       document.getElementById('attachmentList').innerHTML = currentAttachments.map((f, i) => `
+         <div class="flex justify-between items-center bg-gray-100 p-2 rounded text-sm">
+            <span>📄 ${f.fileName}</span>
+            <button type="button" onclick="currentAttachments.splice(${i},1);renderAttachmentsInEditor()" class="text-red-500 font-bold px-2">✕</button>
+         </div>`).join('');
+    }
+
+    function openPreview() {
+      const p = {
+        title: document.getElementById('editTitle').value || '無標題',
+        date: new Date().toISOString().split('T')[0], 
+        author: currentUser.name, 
+        content: quill.root.innerHTML, 
+        attachments: currentAttachments
+      };
+      renderPostDetail(p); 
+      showView('view-viewer');
+      
+      document.getElementById('previewControls').classList.remove('hidden'); 
+      document.getElementById('readControls').classList.add('hidden');
+      document.getElementById('magicLinkSection').classList.add('hidden'); 
+    }
+
+    async function executeSavePost() {
+      const title = document.getElementById('editTitle').value; 
+      if(!title) return alert('標題未填寫');
+      
+      showLoading(true);
+      try {
+        await apiCall('savePost', { data: { 
+          id: document.getElementById('editPostId').value, 
+          title: title, 
+          content: quill.root.innerHTML, 
+          attachments: currentAttachments, 
+          author: currentUser.id 
+        }});
+        alert('發布成功！');
+        doSearch();
+        showView('view-list');
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    // --- 閱讀器與附件渲染 ---
+    async function viewPost(id) {
+       showLoading(true);
+       try {
+          const post = await apiCall('getPost', { postId: id });
+          currentPostIdInViewer = post.id;
+          renderPostDetail(post); 
+          showView('view-viewer');
+          
+          document.getElementById('previewControls').classList.add('hidden'); 
+          document.getElementById('readControls').classList.remove('hidden');
+          document.getElementById('magicLinkResult').classList.add('hidden');
+          
+          const adminBtns = document.getElementById('viewerAdminBtns'); 
+          adminBtns.innerHTML = ''; adminBtns.classList.add('hidden');
+          document.getElementById('magicLinkSection').classList.add('hidden');
+
+          if(currentUser && ['Admin', 'Editor'].includes(currentUser.role)) {
+              adminBtns.classList.remove('hidden');
+              document.getElementById('magicLinkSection').classList.remove('hidden');
+              
+              adminBtns.innerHTML += `<button onclick="editPost('${post.id}')" class="bg-blue-100 text-blue-700 px-2 rounded font-bold">✏️ 編輯</button>`;
+              if(currentUser.role === 'Admin') {
+                adminBtns.innerHTML += `<button onclick="deletePost('${post.id}')" class="bg-red-50 text-red-600 px-2 rounded font-bold">🗑️ 刪除</button>`;
+              }
+          }
+       } catch (err) {
+          alert('讀取失敗');
+       } finally {
+          showLoading(false);
+       }
+    }
+    
+    function renderPostDetail(post) {
+       document.getElementById('viewTitle').innerText = post.title; 
+       document.getElementById('viewDate').innerText = post.date;
+       document.getElementById('viewAuthor').innerText = post.author || ''; 
+       document.getElementById('viewContent').innerHTML = post.content;
+       
+       const con = document.getElementById('attachmentContainer'); 
+       con.innerHTML = '';
+       
+       if (post.attachments && post.attachments.length) {
+          document.getElementById('viewAttachments').classList.remove('hidden'); 
+          post.attachments.forEach(f => renderAttachment(f, con));
+       } else {
+          document.getElementById('viewAttachments').classList.add('hidden'); 
+       }
+    }
+
+    function renderAttachment(file, container) {
+       const ext = file.fileName.split('.').pop().toLowerCase();
+       const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].includes(ext);
+       // 透過 Cloudflare CDN 路由取得二進位檔案
+       const fileUrl = `/api/getFile?id=${file.fileId}`;
+       
+       const wrapper = document.createElement('div'); 
+       wrapper.className = "w-full max-w-3xl bg-white shadow-sm border border-gray-200 rounded overflow-hidden";
+       
+       wrapper.innerHTML = `
+         <div class="text-sm font-bold p-3 bg-gray-50 border-b flex justify-between items-center text-gray-700">
+            <span class="truncate">📎 ${file.fileName}</span>
+            <a href="${fileUrl}" target="_blank" download class="text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded text-xs border border-blue-200 font-bold transition">📥 下載</a>
+         </div>
+         <div class="attachment-content p-4 bg-slate-50 flex justify-center items-center min-h-[100px]"></div>`;
+         
+       container.appendChild(wrapper);
+       const contentBox = wrapper.querySelector('.attachment-content');
+
+       if (isImage) {
+           // 圖片直接渲染，效能最高
+           contentBox.innerHTML = `<img src="${fileUrl}" class="max-w-full h-auto rounded shadow-sm" loading="lazy" alt="${file.fileName}">`;
+       } else {
+           // PDF 使用 pdf.js 解析 CDN URL
+           contentBox.innerHTML = `<div class="spinner border-t-gray-400"></div>`;
+           pdfjsLib.getDocument(fileUrl).promise.then(async pdf => {
+               contentBox.innerHTML = '';
+               for (let i = 1; i <= pdf.numPages; i++) {
+                   const canvas = document.createElement('canvas');
+                   canvas.className = 'pdf-page-canvas mx-auto block mb-4 shadow';
+                   contentBox.appendChild(canvas);
+                   
+                   const page = await pdf.getPage(i);
+                   const viewport = page.getViewport({scale: 1.5});
+                   const context = canvas.getContext('2d');
+                   canvas.height = viewport.height;
+                   canvas.width = viewport.width;
+                   await page.render({canvasContext: context, viewport: viewport}).promise;
+               }
+           }).catch(err => {
+               contentBox.innerHTML = `<span class="text-red-500 text-sm">無法線上預覽此格式，請直接點擊下載。</span>`;
+           });
+       }
+    }
+
+    // --- 管理功能 ---
+    async function editPost(id) { 
+       showLoading(true); 
+       try { const p = await apiCall('getPost', { postId: id }); openEditor(p); } 
+       catch(e) { alert(e.message); } finally { showLoading(false); }
+    }
+    
+    async function deletePost(id) { 
+       if(!confirm('確認刪除公告？此操作無法復原。')) return; 
+       showLoading(true); 
+       try { await apiCall('deletePost', { postId: id, operatorId: currentUser.id }); doSearch(); showView('view-list'); } 
+       catch(e) { alert(e.message); } finally { showLoading(false); }
+    } 
+    
+    async function createMagicLink() { 
+       showLoading(true);
+       try {
+         const url = await apiCall('generateMagicLink', { postId: currentPostIdInViewer });
+         const r = document.getElementById('magicLinkResult');
+         r.classList.remove('hidden'); r.innerText = url;
+       } catch(e) { alert(e.message); } finally { showLoading(false); }
+    }
+  </script>
+</body>
+</html>
