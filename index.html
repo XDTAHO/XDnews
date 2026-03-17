@@ -432,34 +432,60 @@
 
     // --- 閱讀器與附件渲染 ---
     async function viewPost(id) {
-       showLoading(true);
+       // 1. 從已知的列表資料中抓取摘要，達到「秒開」標題的效果
+       const summary = allPostsData.find(p => p.id === id) || { title: '載入中...', date: '', author: '' };
+       currentPostIdInViewer = id;
+       
+       // 瞬間填入標題與基本資訊
+       document.getElementById('viewTitle').innerText = summary.title; 
+       document.getElementById('viewDate').innerText = summary.date ? summary.date.split(' ')[0] : '';
+       document.getElementById('viewAuthor').innerText = summary.author; 
+       
+       // 在內文區塊顯示「局部載入中」的優雅動畫
+       document.getElementById('viewContent').innerHTML = `
+         <div class="flex flex-col items-center justify-center gap-3 text-blue-500 py-16 bg-slate-50 rounded-lg border border-dashed border-gray-200">
+            <div class="spinner border-t-blue-500 w-8 h-8"></div>
+            <span class="font-bold tracking-wide text-sm">正在載入詳細內容與附件...</span>
+         </div>
+       `;
+       
+       // 先隱藏附件區塊與管理員按鈕
+       document.getElementById('attachmentContainer').innerHTML = '';
+       document.getElementById('viewAttachments').classList.add('hidden'); 
+       document.getElementById('magicLinkResult').classList.add('hidden');
+       document.getElementById('magicLinkSection').classList.add('hidden');
+       const adminBtns = document.getElementById('viewerAdminBtns'); 
+       adminBtns.innerHTML = ''; 
+       adminBtns.classList.add('hidden');
+       
+       // 切換畫面 (⚠️ 這裡我們拿掉了全螢幕的 showLoading，實現無縫切換)
+       showView('view-viewer');
+       document.getElementById('previewControls').classList.add('hidden'); 
+       document.getElementById('readControls').classList.remove('hidden');
+
+       // 2. 在背景默默向伺服器請求完整的內文與附件清單
        try {
           const post = await apiCall('getPost', { postId: id });
-          currentPostIdInViewer = post.id;
+          
+          // 資料回來後，呼叫現有的渲染函式，瞬間覆寫內容與附件
           renderPostDetail(post); 
-          showView('view-viewer');
           
-          document.getElementById('previewControls').classList.add('hidden'); 
-          document.getElementById('readControls').classList.remove('hidden');
-          document.getElementById('magicLinkResult').classList.add('hidden');
-          
-          const adminBtns = document.getElementById('viewerAdminBtns'); 
-          adminBtns.innerHTML = ''; adminBtns.classList.add('hidden');
-          document.getElementById('magicLinkSection').classList.add('hidden');
-
+          // 處理管理員與編輯按鈕
           if(currentUser && ['Admin', 'Editor'].includes(currentUser.role)) {
               adminBtns.classList.remove('hidden');
               document.getElementById('magicLinkSection').classList.remove('hidden');
               
-              adminBtns.innerHTML += `<button onclick="editPost('${post.id}')" class="bg-blue-100 text-blue-700 px-2 rounded font-bold">✏️ 編輯</button>`;
+              adminBtns.innerHTML += `<button onclick="editPost('${post.id}')" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1.5 rounded font-bold transition shadow-sm">✏️ 編輯</button>`;
               if(currentUser.role === 'Admin') {
-                adminBtns.innerHTML += `<button onclick="deletePost('${post.id}')" class="bg-red-50 text-red-600 px-2 rounded font-bold">🗑️ 刪除</button>`;
+                adminBtns.innerHTML += `<button onclick="deletePost('${post.id}')" class="bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1.5 rounded font-bold transition shadow-sm ml-2">🗑️ 刪除</button>`;
               }
           }
        } catch (err) {
-          alert('讀取失敗');
-       } finally {
-          showLoading(false);
+          // 如果連線失敗，在內文區塊顯示錯誤提示
+          document.getElementById('viewContent').innerHTML = `
+            <div class="text-red-500 font-bold py-10 text-center bg-red-50 rounded-lg border border-red-200">
+               ⚠️ 讀取失敗：${err.message} <br><button onclick="viewPost('${id}')" class="mt-4 underline text-sm">點此重試</button>
+            </div>`;
        }
     }
     
