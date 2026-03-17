@@ -480,51 +480,62 @@
        }
     }
 
-    function renderAttachment(file, container) {
+function renderAttachment(file, container) {
        const ext = file.fileName.split('.').pop().toLowerCase();
        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].includes(ext);
-       // 透過 Cloudflare CDN 路由取得二進位檔案
        const fileUrl = `/api/getFile?id=${file.fileId}`;
        
        const wrapper = document.createElement('div'); 
-       wrapper.className = "w-full max-w-3xl bg-white shadow-sm border border-gray-200 rounded overflow-hidden";
+       // 稍微加寬容器，讓 PDF 閱讀視野更好
+       wrapper.className = "w-full max-w-4xl mx-auto bg-white shadow-sm border border-gray-200 rounded overflow-hidden";
        
        wrapper.innerHTML = `
-         <div class="text-sm font-bold p-3 bg-gray-50 border-b flex justify-between items-center text-gray-700">
+         <div class="text-sm font-bold p-3 bg-gray-50 border-b flex justify-between items-center text-gray-700 sticky top-14 z-10 shadow-sm">
             <span class="truncate">📎 ${file.fileName}</span>
-            <a href="${fileUrl}" target="_blank" download class="text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded text-xs border border-blue-200 font-bold transition">📥 下載</a>
+            <a href="${fileUrl}" target="_blank" download class="text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded text-xs border border-blue-200 font-bold transition flex-shrink-0">📥 下載原檔</a>
          </div>
-         <div class="attachment-content p-4 bg-slate-50 flex justify-center items-center min-h-[100px]"></div>`;
+         <div class="attachment-content p-4 bg-slate-200 flex flex-col items-center min-h-[100px] w-full overflow-x-auto"></div>`;
          
        container.appendChild(wrapper);
        const contentBox = wrapper.querySelector('.attachment-content');
 
        if (isImage) {
-           // 圖片直接渲染，效能最高
            contentBox.innerHTML = `<img src="${fileUrl}" class="max-w-full h-auto rounded shadow-sm" loading="lazy" alt="${file.fileName}">`;
        } else {
-           // PDF 使用 pdf.js 解析 CDN URL
-           contentBox.innerHTML = `<div class="spinner border-t-gray-400"></div>`;
+           // 顯示載入中的小動畫
+           contentBox.innerHTML = `<div class="flex flex-col items-center gap-2"><div class="spinner border-t-blue-500"></div><span class="text-xs text-gray-500">讀取文件中...</span></div>`;
+           
            pdfjsLib.getDocument(fileUrl).promise.then(async pdf => {
                contentBox.innerHTML = '';
+               
+               // 迴圈：依序垂直渲染每一頁
                for (let i = 1; i <= pdf.numPages; i++) {
+                   const canvasWrapper = document.createElement('div');
+                   // 設定下邊距(mb-6)，讓每一頁之間有明顯空隙
+                   canvasWrapper.className = 'w-full flex justify-center mb-6 relative';
+                   // 加入半透明的頁碼標籤 (左上角)
+                   canvasWrapper.innerHTML = `<span class="absolute left-0 top-0 bg-black/40 text-white text-xs px-2 py-1 rounded-br z-10">P.${i}</span>`;
+                   
                    const canvas = document.createElement('canvas');
-                   canvas.className = 'pdf-page-canvas mx-auto block mb-4 shadow';
-                   contentBox.appendChild(canvas);
+                   // max-w-full 確保大尺寸 PDF 在手機上也會自動縮小，不會跑版
+                   canvas.className = 'max-w-full h-auto border border-gray-300 shadow-md bg-white';
+                   canvasWrapper.appendChild(canvas);
+                   contentBox.appendChild(canvasWrapper);
                    
                    const page = await pdf.getPage(i);
-                   const viewport = page.getViewport({scale: 1.5});
+                   const viewport = page.getViewport({scale: 1.5}); // 放大 1.5 倍確保文字清晰
                    const context = canvas.getContext('2d');
                    canvas.height = viewport.height;
                    canvas.width = viewport.width;
+                   
+                   // 加上 await 確保一頁畫完再畫下一頁，避免記憶體爆掉
                    await page.render({canvasContext: context, viewport: viewport}).promise;
                }
            }).catch(err => {
-               contentBox.innerHTML = `<span class="text-red-500 text-sm">無法線上預覽此格式，請直接點擊下載。</span>`;
+               contentBox.innerHTML = `<div class="bg-red-50 text-red-500 p-3 rounded text-sm w-full text-center">無法線上預覽此檔案，請點擊上方按鈕下載。</div>`;
            });
        }
     }
-
     // --- 管理功能 ---
     async function editPost(id) { 
        showLoading(true); 
